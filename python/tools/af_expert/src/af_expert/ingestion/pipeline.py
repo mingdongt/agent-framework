@@ -59,10 +59,14 @@ def run_ingestion_tick(
     for repo_cfg in config.repos:
         repo = repo_cfg.owner_repo
         cursor = _cursor_for(state, repo, now)
+        log.info("Ingesting %s since %s", repo, cursor.isoformat())
         try:
             issues_count = fetch_issues(gh, store, repo=repo, since=cursor)
             prs_count = fetch_prs(gh, store, repo=repo, since=cursor)
             releases_count = fetch_releases(gh, store, repo=repo, since=cursor)
+            log.info(
+                "  %s: %d issues, %d PRs, %d releases", repo, issues_count, prs_count, releases_count
+            )
             result.new_events += issues_count + prs_count + releases_count
             _advance_cursor(state, repo, now)
             result.repos_succeeded += 1

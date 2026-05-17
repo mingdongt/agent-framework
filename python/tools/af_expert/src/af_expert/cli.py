@@ -1,5 +1,14 @@
 from __future__ import annotations
 
+import logging
+import os
+
+logging.basicConfig(
+    level=os.environ.get("AF_EXPERT_LOG_LEVEL", "INFO"),
+    format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
+
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path

@@ -92,6 +92,22 @@ af-expert stats
 - Strategies S2-S7: NOT YET. See spec.
 - No real RAG: by design — corpus fits in Opus 4.7 context.
 
+## Verbose logging
+
+By default `af-expert` logs at `INFO` level (per-repo ingestion summary,
+S1 pattern extraction and per-target verdicts). To see more or less:
+
+```bash
+$env:AF_EXPERT_LOG_LEVEL = "DEBUG"   # PowerShell: see skip decisions, FTS queries, etc.
+export AF_EXPERT_LOG_LEVEL=DEBUG      # bash/zsh equivalent
+```
+
+To silence INFO logs (only show errors):
+
+```bash
+$env:AF_EXPERT_LOG_LEVEL = "WARNING"
+```
+
 ## Troubleshooting
 
 - `StateLockError`: another `af-expert` process is running, or a previous

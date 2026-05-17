@@ -91,21 +91,28 @@ class PRForwardPortStrategy(Strategy):
             for pr in self.events.query_recent_prs(source_repo, since=deltas.since, only_merged=True):
                 labels = self._parse_labels(pr["labels"])
                 if not is_likely_bug_fix(pr["title"], labels):
+                    log.debug("S1 skip %s#%d: not a bug fix (%s)", source_repo, pr["number"], pr["title"])
                     continue
+                log.info("S1 extracting pattern from %s#%d: %s", source_repo, pr["number"], pr["title"])
                 pattern = self._extract_pattern(pr)
                 if pattern is None:
+                    log.info("S1 pattern extraction returned None for %s#%d", source_repo, pr["number"])
                     continue
+                log.info("S1 pattern '%s' extracted; scanning %d target repos", pattern.pattern_name, len(all_repos) - 1)
 
                 for target_repo in all_repos:
                     if target_repo == source_repo:
                         continue
+                    log.info("S1   checking %s for pattern '%s'", target_repo, pattern.pattern_name)
                     match = self._match_in_repo(pattern, target_repo)
                     if match is None:
                         continue
                     if not match.get("matches"):
+                        log.info("S1   %s: no match (conf %.2f)", target_repo, float(match.get("confidence", 0.0)))
                         continue
                     conf = float(match.get("confidence", 0.0))
                     if conf < self.confidence_threshold:
+                        log.info("S1   %s: match below threshold (conf %.2f < %.2f)", target_repo, conf, self.confidence_threshold)
                         continue
                     candidate = self._build_candidate(
                         source_repo=source_repo,
@@ -116,6 +123,7 @@ class PRForwardPortStrategy(Strategy):
                     )
                     self.candidates.append(candidate)
                     produced.append(candidate)
+                    log.info("S1   %s: candidate %s emitted (conf %.2f)", target_repo, candidate.id, conf)
 
         return produced
 
