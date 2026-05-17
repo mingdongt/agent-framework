@@ -1,8 +1,8 @@
 # af-fix
 
-Local CLI: triage open-source issues across configured repos, drive OpenHands in Docker to fix them, open cross-fork draft PRs.
+Local CLI: triage open-source issues across configured repos, drive Claude Code SDK to fix them, open cross-fork draft PRs.
 
-Triage layer built on `agent-framework`. Fix layer driven by `openhands-sdk` (Claude Opus 4.7).
+Triage and fix layers both use `claude-agent-sdk`, which runs the local `claude` CLI under the hood — no Anthropic API key required. Microsoft enterprise auth (or your usual Claude Code setup) is used automatically.
 
 ## Install
 
@@ -11,7 +11,7 @@ cd python/tools/af_fix
 uv sync
 ```
 
-Requires Docker running locally.
+Requires `claude` CLI installed and authenticated locally (Microsoft enterprise auth or your usual Claude Code setup).
 
 ## Configure
 
@@ -20,13 +20,16 @@ Requires Docker running locally.
 ```toml
 github_token = "ghp_xxx"            # PAT, public_repo scope only
 fork_owner   = "your-github-login"
-anthropic_api_key = "sk-ant-xxx"
 
 target_repos = [
     "microsoft/agent-framework",
     "vllm-project/vllm",
     # ... must have your fork of each
 ]
+
+# Optional
+model    = "claude-opus-4-7"   # default
+max_turns = 80                  # default
 ```
 
 You must have pre-forked each repo in `target_repos` to your account.
@@ -78,10 +81,11 @@ For the legacy one-shot mode, use `af-fix run --top 5`.
 
 ## Safety status (Phase 1)
 
-WARNING: **Phase 1 limitation:** OpenHands currently runs in-process (LocalConversation), not in Docker.
+WARNING: **Phase 1 limitation:** Claude Code SDK runs in-process via the local `claude` CLI.
 The agent has the same filesystem and network access as the calling process. Run only against
-trusted repos until the Docker-backed RemoteConversation path is wired (see TODO in
-src/af_fix/openhands_runner.py).
+trusted repos until containerization is added (Phase 2). Claude Code's built-in permission
+prompts may catch egregious actions, but the process-level boundary is the same as the
+calling shell.
 
 - All PRs opened as **draft**. Tool never marks ready-for-review.
 - Branch must be prefixed `af-fix/issue-`; submitter rejects others.
