@@ -22,7 +22,7 @@ KNOWN_SUBCOMMANDS = {"triage", "execute", "run"}
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="af-fix", description="Triage and fix OSS issues via OpenHands.")
+    p = argparse.ArgumentParser(prog="af-fix", description="Triage and fix OSS issues via Claude Code.")
     sub = p.add_subparsers(dest="command", required=True)
 
     def _shared_top(parser: argparse.ArgumentParser) -> None:
@@ -34,8 +34,8 @@ def build_parser() -> argparse.ArgumentParser:
     # `run` — all in one (legacy / explicit)
     p_run = sub.add_parser("run", help="Triage + fix + open PRs in one shot.")
     _shared_top(p_run)
-    p_run.add_argument("--triage-only", action="store_true", help="Score and print top-N; do not run OpenHands.")
-    p_run.add_argument("--no-push", action="store_true", help="Run OpenHands fully; skip push & PR creation.")
+    p_run.add_argument("--triage-only", action="store_true", help="Score and print top-N; do not run Claude Code.")
+    p_run.add_argument("--no-push", action="store_true", help="Run Claude Code fully; skip push & PR creation.")
     p_run.add_argument("--dry-run", action="store_true", help="Print what would happen; no API calls.")
     p_run.add_argument("--auto-submit", action="store_true", help="Skip per-PR confirm.")
 
@@ -142,13 +142,19 @@ def run_pipeline(
     state: Any,
     state_path: Path,
     triage_agent: Any,
-    openhands_runner: Any,
+    runner: Any,
     workspace_manager: Any,
     pr_submitter: Any,
     upstream_url_for: Callable[[str], str],
     confirm_callback: Callable[[list[str]], bool] = _default_confirm,
     pr_decision_callback: Callable[[Any, str], PRDecision] = _default_pr_decision,
+    # Backward-compat alias
+    openhands_runner: Any = None,
 ) -> int:
+    # Support legacy kwarg name
+    if openhands_runner is not None and runner is None:
+        runner = openhands_runner
+
     # 1. Collect issues across repos
     all_issues = []
     target_ref = parse_retry_id(args.retry_id) if args.retry_id else None
@@ -174,7 +180,7 @@ def run_pipeline(
 
     by_key = {i.ref.key: i for i in all_issues}
 
-    # 3. For each top issue: clone → openhands → commit → submit
+    # 3. For each top issue: clone → claude agent → commit → submit
     for score in top_scores:
         ref = score.ref
         issue = by_key[ref.key]
@@ -189,7 +195,7 @@ def run_pipeline(
             print(f"{ref.key}: clone failed ({exc})")
             continue
 
-        result = openhands_runner.run(issue=issue, workspace=workspace)
+        result = runner.run(issue=issue, workspace=workspace)
 
         if not result.success:
             outcome = AttemptOutcome.GAVE_UP if result.gave_up else AttemptOutcome.ERROR
@@ -296,14 +302,20 @@ def execute_pipeline(
     github: Any,
     state: Any,
     state_path: Path,
-    openhands_runner: Any,
+    runner: Any,
     workspace_manager: Any,
     pr_submitter: Any,
     upstream_url_for: Callable[[str], str],
     pr_decision_callback: Callable[[Any, str], PRDecision] | None = None,
+    # Backward-compat alias
+    openhands_runner: Any = None,
 ) -> int:
     from af_fix.models import Issue
     from af_fix.todolist import load_todolist_json, parse_checked_items
+
+    # Support legacy kwarg name
+    if openhands_runner is not None and runner is None:
+        runner = openhands_runner
 
     md_path = Path(args.from_path)
     if not md_path.exists():
@@ -343,7 +355,7 @@ def execute_pipeline(
             print(f"{key}: clone failed ({exc})")
             continue
 
-        result = openhands_runner.run(issue=issue, workspace=workspace)
+        result = runner.run(issue=issue, workspace=workspace)
         if not result.success:
             outcome = AttemptOutcome.GAVE_UP if result.gave_up else AttemptOutcome.ERROR
             state.record_attempt(
@@ -403,9 +415,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args_with_compat(argv)
 
     # Lazy imports — keep CLI import lightweight
+    from af_fix.claude_agent_runner import ClaudeAgentRunner
     from af_fix.config import Config
     from af_fix.github_client import GitHubClient
-    from af_fix.openhands_runner import OpenHandsRunner
     from af_fix.pr_submitter import PRSubmitter
     from af_fix.state import State
     from af_fix.triage_agent import TriageAgent
@@ -422,8 +434,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "triage":
         target_repos = args.repos.split(",") if args.repos else cfg.target_repos
-        chat_client = _build_chat_client(cfg)
-        triage_agent = TriageAgent(client=chat_client)
+        triage_agent = TriageAgent()
         return triage_pipeline(
             args=args,
             target_repos=target_repos,
@@ -433,12 +444,7 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     if args.command == "execute":
-        runner = OpenHandsRunner(
-            anthropic_api_key=cfg.anthropic_api_key,
-            model=cfg.fix_model,
-            max_iterations=cfg.openhands_max_iterations,
-            openhands_image=cfg.openhands_image,
-        )
+        agent_runner = ClaudeAgentRunner(model=cfg.model, max_turns=cfg.max_turns)
         workspace_manager = WorkspaceManager(root=Path.home() / ".af-fix" / "workspaces")
         pr_submitter = PRSubmitter(github=github, workspace_manager=workspace_manager, fork_owner=cfg.fork_owner)
         pr_submitter.verify_fork_owner()
@@ -447,7 +453,7 @@ def main(argv: list[str] | None = None) -> int:
             github=github,
             state=state,
             state_path=state_path,
-            openhands_runner=runner,
+            runner=agent_runner,
             workspace_manager=workspace_manager,
             pr_submitter=pr_submitter,
             upstream_url_for=upstream_url_for,
@@ -455,14 +461,8 @@ def main(argv: list[str] | None = None) -> int:
 
     # Default: command == "run"
     target_repos = args.repos.split(",") if args.repos else cfg.target_repos
-    chat_client = _build_chat_client(cfg)
-    triage_agent = TriageAgent(client=chat_client)
-    runner = OpenHandsRunner(
-        anthropic_api_key=cfg.anthropic_api_key,
-        model=cfg.fix_model,
-        max_iterations=cfg.openhands_max_iterations,
-        openhands_image=cfg.openhands_image,
-    )
+    triage_agent = TriageAgent()
+    agent_runner = ClaudeAgentRunner(model=cfg.model, max_turns=cfg.max_turns)
     workspace_manager = WorkspaceManager(root=Path.home() / ".af-fix" / "workspaces")
     pr_submitter = PRSubmitter(github=github, workspace_manager=workspace_manager, fork_owner=cfg.fork_owner)
     pr_submitter.verify_fork_owner()
@@ -476,19 +476,12 @@ def main(argv: list[str] | None = None) -> int:
         state=state,
         state_path=state_path,
         triage_agent=triage_agent,
-        openhands_runner=runner,
+        runner=agent_runner,
         workspace_manager=workspace_manager,
         pr_submitter=pr_submitter,
         upstream_url_for=upstream_url_for,
         pr_decision_callback=pr_callback,
     )
-
-
-def _build_chat_client(cfg: Any) -> Any:
-    """Build the Anthropic chat client for TriageAgent (agent-framework)."""
-    from agent_framework.anthropic import AnthropicClient
-
-    return AnthropicClient(api_key=cfg.anthropic_api_key, model=cfg.triage_model)
 
 
 if __name__ == "__main__":
