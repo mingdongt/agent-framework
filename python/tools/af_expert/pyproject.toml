@@ -8,8 +8,7 @@ dependencies = [
     "pygithub>=2.5.0",
     "pydantic>=2.10.0",
     "click>=8.1.7",
-    "tomli; python_version<'3.11'",
-    "platformdirs>=4.3.0",
+"platformdirs>=4.3.0",
 ]
 
 [project.scripts]
