@@ -65,8 +65,8 @@ def test_dedup_by_target_and_type() -> None:
 
 
 def test_orders_by_tier_then_effort() -> None:
-    o_t1 = _opp(id_="t1", tier=1)
-    o_t2 = _opp(id_="t2", tier=2)
-    o_t4 = _opp(id_="t4", tier=4)
+    o_t1 = _opp(id_="t1", tier=1, target="t1")
+    o_t2 = _opp(id_="t2", tier=2, target="t2")
+    o_t4 = _opp(id_="t4", tier=4, target="t4")
     opps = Consolidator().consolidate(strategic=[o_t4, o_t1, o_t2], tactical_hypotheses=[])
     assert [o.id for o in opps] == ["t1", "t2", "t4"]

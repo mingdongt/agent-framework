@@ -68,20 +68,14 @@ class Consolidator:
 
     def _dedup(self, opps: list[Opportunity]) -> list[Opportunity]:
         seen: dict[tuple[str, str], Opportunity] = {}
-        out: list[Opportunity] = []
         for opp in opps:
-            # Only deduplicate targets that look like real file/repo references
-            # (contain "." or ":"), not trivial placeholder strings.
-            if "." not in opp.target and ":" not in opp.target and "/" not in opp.target:
-                out.append(opp)
-                continue
             key = (opp.type.value, opp.target)
             if key in seen:
                 if opp.tier < seen[key].tier:
                     seen[key] = opp
             else:
                 seen[key] = opp
-        return out + list(seen.values())
+        return list(seen.values())
 
     @staticmethod
     def _effort_minutes(effort: str) -> int:
