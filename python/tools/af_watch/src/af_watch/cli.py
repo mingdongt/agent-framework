@@ -23,7 +23,6 @@ from af_watch.reasoning.question_runner import QuestionRunner
 from af_watch.reasoning.runner import ReasoningRunner
 from af_watch.region_selector import RegionSelector
 from af_watch.reporter import Reporter
-from af_watch.reproducer import Reproducer
 from af_watch.state import State
 
 _LOG = logging.getLogger("af_watch")
@@ -158,14 +157,22 @@ async def cmd_run(args: argparse.Namespace) -> int:
     state = State.load(home / "state.json")
 
     until = datetime.now(tz=timezone.utc)
-    since = until - _parse_window(args.window)
+    try:
+        since = until - _parse_window(args.window)
+    except ValueError as exc:
+        _LOG.error("invalid --window: %s", exc)
+        return 1
     repos = args.repos.split(",") if args.repos else cfg.target_repos
 
     started = datetime.now(tz=timezone.utc)
     _LOG.info("scanning %d repos from %s", len(repos), since.isoformat())
 
     scanner = ActivityScanner(token=cfg.github_token)
-    events = scanner.scan_all(repos, since=since, until=until)
+    try:
+        events = scanner.scan_all(repos, since=since, until=until)
+    except AFWatchError as exc:
+        _LOG.error("activity scan failed: %s", exc)
+        return 1
     _LOG.info("activity events: %d", len(events))
 
     feeds_dir = home / "feeds" / "activity"
@@ -209,12 +216,7 @@ async def cmd_run(args: argparse.Namespace) -> int:
     opps = consolidator.consolidate(strategic=strategic, tactical_hypotheses=tactical_hyps)
 
     if not args.skip_repro:
-        # Phase 1: no auto-generated repro scripts yet; Reproducer call deferred.
-        # Just re-tier in case some opportunities are pre-marked confirmed (e.g., manual repro).
-        _ = Reproducer(
-            workspace_base=Path(cfg.repro_workspace_base).expanduser(),
-            home_repo=cfg.home_repo,
-        )
+        # Phase 1: no auto-generated repro scripts yet; just re-tier in case ops are pre-marked confirmed.
         opps = consolidator.retier_after_repro(opps)
 
     industry_highlights: list = []  # Phase 1: industry crawler integration deferred
