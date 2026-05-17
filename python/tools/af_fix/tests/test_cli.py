@@ -5,12 +5,20 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from af_fix.cli import PRDecision, ask_pr_decision, build_parser, parse_retry_id, refuse_in_ci, run_pipeline
+from af_fix.cli import (
+    PRDecision,
+    ask_pr_decision,
+    parse_args_with_compat,
+    parse_retry_id,
+    refuse_in_ci,
+    run_pipeline,
+)
 from af_fix.models import AttemptOutcome, FixResult, Issue, IssueRef, PRResult, ScoreResult
 
 
 def test_parser_defaults() -> None:
-    args = build_parser().parse_args([])
+    # With subcommands, use `run` explicitly or via compat wrapper
+    args = parse_args_with_compat(["--top", "5"])
     assert args.top == 5
     assert args.triage_only is False
     assert args.no_push is False
@@ -21,7 +29,7 @@ def test_parser_defaults() -> None:
 
 
 def test_parser_all_flags() -> None:
-    args = build_parser().parse_args([
+    args = parse_args_with_compat([
         "--top", "3",
         "--triage-only",
         "--no-push",
@@ -80,7 +88,7 @@ def test_run_pipeline_triage_only(tmp_path: Path) -> None:
     state = MagicMock()
     state.should_skip.return_value = False
 
-    args = build_parser().parse_args(["--top", "1", "--triage-only"])
+    args = parse_args_with_compat(["--top", "1", "--triage-only"])
     exit_code = run_pipeline(
         args=args,
         target_repos=["o/r"],
@@ -126,7 +134,7 @@ def test_run_pipeline_full_flow_pr_opened(tmp_path: Path) -> None:
     pr_sub = MagicMock()
     pr_sub.submit.return_value = PRResult(number=999, url="https://x/pr/999")
 
-    args = build_parser().parse_args(["--top", "1"])
+    args = parse_args_with_compat(["--top", "1"])
     exit_code = run_pipeline(
         args=args,
         target_repos=["o/r"],
@@ -173,7 +181,7 @@ def test_run_pipeline_records_gave_up_when_agent_gives_up(tmp_path: Path) -> Non
         reason="cannot reproduce",
     )
 
-    args = build_parser().parse_args(["--top", "1"])
+    args = parse_args_with_compat(["--top", "1"])
     exit_code = run_pipeline(
         args=args,
         target_repos=["o/r"],
@@ -245,7 +253,7 @@ def test_run_pipeline_skips_pr_when_user_rejects(tmp_path: Path) -> None:
 
     pr_sub = MagicMock()
 
-    args = build_parser().parse_args(["--top", "1"])
+    args = parse_args_with_compat(["--top", "1"])
     exit_code = run_pipeline(
         args=args,
         target_repos=["o/r"],
@@ -294,7 +302,7 @@ def test_run_pipeline_edit_preserves_workspace(tmp_path: Path) -> None:
 
     pr_sub = MagicMock()
 
-    args = build_parser().parse_args(["--top", "1"])
+    args = parse_args_with_compat(["--top", "1"])
     exit_code = run_pipeline(
         args=args,
         target_repos=["o/r"],
@@ -343,7 +351,7 @@ def test_run_pipeline_yes_submits_pr(tmp_path: Path) -> None:
     pr_sub = MagicMock()
     pr_sub.submit.return_value = PRResult(number=999, url="https://x/pr/999")
 
-    args = build_parser().parse_args(["--top", "1"])
+    args = parse_args_with_compat(["--top", "1"])
     exit_code = run_pipeline(
         args=args,
         target_repos=["o/r"],
@@ -362,3 +370,46 @@ def test_run_pipeline_yes_submits_pr(tmp_path: Path) -> None:
     pr_sub.submit.assert_called_once()
     kwargs = state.record_attempt.call_args.kwargs
     assert kwargs["outcome"] == AttemptOutcome.PR_OPENED
+
+
+# ── Task C: subcommand parser + parse_args_with_compat ───────────────────────
+
+
+def test_parser_run_subcommand() -> None:
+    from af_fix.cli import parse_args_with_compat
+
+    args = parse_args_with_compat(["run", "--top", "3"])
+    assert args.command == "run"
+    assert args.top == 3
+
+
+def test_parser_triage_subcommand() -> None:
+    from af_fix.cli import parse_args_with_compat
+
+    args = parse_args_with_compat(["triage", "--top", "10"])
+    assert args.command == "triage"
+    assert args.top == 10
+
+
+def test_parser_execute_subcommand_from() -> None:
+    from af_fix.cli import parse_args_with_compat
+
+    args = parse_args_with_compat(["execute", "--from", "/tmp/t.md"])
+    assert args.command == "execute"
+    assert args.from_path == "/tmp/t.md"
+
+
+def test_parser_execute_auto_submit() -> None:
+    from af_fix.cli import parse_args_with_compat
+
+    args = parse_args_with_compat(["execute", "--from", "/tmp/t.md", "--auto-submit"])
+    assert args.auto_submit is True
+
+
+def test_parser_backward_compat_no_subcommand() -> None:
+    from af_fix.cli import parse_args_with_compat
+
+    # Old-style: `af-fix --top 5` should be treated as `af-fix run --top 5`
+    args = parse_args_with_compat(["--top", "5"])
+    assert args.command == "run"
+    assert args.top == 5

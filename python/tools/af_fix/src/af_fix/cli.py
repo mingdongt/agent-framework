@@ -18,16 +18,53 @@ class PRDecision(StrEnum):
     EDIT = "edit"
 
 
+KNOWN_SUBCOMMANDS = {"triage", "execute", "run"}
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="af-fix", description="Triage and fix OSS issues via OpenHands.")
-    p.add_argument("--top", type=int, default=5, help="Number of issues to fix across all repos (default 5).")
-    p.add_argument("--triage-only", action="store_true", help="Score and print top-N; do not run OpenHands.")
-    p.add_argument("--no-push", action="store_true", help="Run OpenHands fully; skip push & PR creation.")
-    p.add_argument("--dry-run", action="store_true", help="Print what would happen; no LLM calls, no API calls.")
-    p.add_argument("--retry-failed", action="store_true", help="Allow re-attempt of gave_up / error outcomes.")
-    p.add_argument("--retry-id", type=str, default=None, help="Force retry of one specific issue, format owner/name:N.")
-    p.add_argument("--repos", type=str, default=None, help="Comma-separated override list of owner/name repos.")
+    sub = p.add_subparsers(dest="command", required=True)
+
+    def _shared_top(parser: argparse.ArgumentParser) -> None:
+        parser.add_argument("--top", type=int, default=5, help="Issues to consider across all repos.")
+        parser.add_argument("--repos", type=str, default=None, help="Comma-separated owner/name override.")
+        parser.add_argument("--retry-failed", action="store_true")
+        parser.add_argument("--retry-id", type=str, default=None)
+
+    # `run` — all in one (legacy / explicit)
+    p_run = sub.add_parser("run", help="Triage + fix + open PRs in one shot.")
+    _shared_top(p_run)
+    p_run.add_argument("--triage-only", action="store_true", help="Score and print top-N; do not run OpenHands.")
+    p_run.add_argument("--no-push", action="store_true", help="Run OpenHands fully; skip push & PR creation.")
+    p_run.add_argument("--dry-run", action="store_true", help="Print what would happen; no API calls.")
+    p_run.add_argument("--auto-submit", action="store_true", help="Skip per-PR confirm.")
+
+    # `triage` — only score + save artifact
+    p_triage = sub.add_parser("triage", help="Score issues and save todolist artifact; do not fix.")
+    _shared_top(p_triage)
+    p_triage.add_argument("--save", type=str, default=None, help="Output dir for todolist (default ~/.af-fix/).")
+
+    # `execute` — read todolist and fix checked items
+    p_exec = sub.add_parser("execute", help="Execute fixes for items checked in a todolist.")
+    p_exec.add_argument("--from", dest="from_path", type=str, required=True, help="Path to todolist .md.")
+    p_exec.add_argument("--no-push", action="store_true")
+    p_exec.add_argument("--dry-run", action="store_true")
+    p_exec.add_argument("--auto-submit", action="store_true")
+
     return p
+
+
+def parse_args_with_compat(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse argv, injecting 'run' when no subcommand is present (backward compat)."""
+    parser = build_parser()
+    if argv is None:
+        argv = sys.argv[1:]
+    if not argv or argv[0].startswith("-"):
+        # No subcommand → treat as `run`
+        argv = ["run", *list(argv)]
+    elif argv[0] not in KNOWN_SUBCOMMANDS:
+        argv = ["run", *list(argv)]
+    return parser.parse_args(argv)
 
 
 def parse_retry_id(s: str) -> IssueRef:
@@ -213,10 +250,157 @@ def run_pipeline(
     return 0
 
 
+def triage_pipeline(
+    *,
+    args: argparse.Namespace,
+    target_repos: list[str],
+    github: Any,
+    state: Any,
+    triage_agent: Any,
+) -> int:
+    """Run triage and save todolist artifact; do not fix."""
+    from af_fix.todolist import save_todolist
+
+    all_issues = []
+    target_ref = parse_retry_id(args.retry_id) if args.retry_id else None
+    for repo in target_repos:
+        for issue in github.list_open_issues(repo):
+            if target_ref is not None:
+                if issue.ref.key != target_ref.key:
+                    continue
+            elif state.should_skip(issue.ref, retry_failed=args.retry_failed):
+                continue
+            all_issues.append(issue)
+
+    scores = triage_agent.score_all(all_issues)
+    issues_by_key = {i.ref.key: i for i in all_issues}
+
+    out_dir = Path(args.save) if args.save else Path.home() / ".af-fix"
+    md_path, _json_path = save_todolist(
+        scores=scores,
+        issues_by_key=issues_by_key,
+        generated_at=datetime.now(timezone.utc),
+        out_dir=out_dir,
+    )
+    print("Triage complete. Top results:")
+    for s in sorted(scores, key=lambda x: x.score, reverse=True)[: args.top]:
+        print(f"  {s.ref.key}  score={s.score:2d}  {s.reason}")
+    print(f"\nTodolist written to: {md_path}")
+    print(f"Edit and run: af-fix execute --from {md_path}")
+    return 0
+
+
+def execute_pipeline(
+    *,
+    args: argparse.Namespace,
+    github: Any,
+    state: Any,
+    state_path: Path,
+    openhands_runner: Any,
+    workspace_manager: Any,
+    pr_submitter: Any,
+    upstream_url_for: Callable[[str], str],
+    pr_decision_callback: Callable[[Any, str], PRDecision] | None = None,
+) -> int:
+    from af_fix.models import Issue
+    from af_fix.todolist import load_todolist_json, parse_checked_items
+
+    md_path = Path(args.from_path)
+    if not md_path.exists():
+        print(f"todolist not found: {md_path}")
+        return 2
+
+    md = md_path.read_text(encoding="utf-8")
+    checked_refs = parse_checked_items(md)
+    if not checked_refs:
+        print("No checked items in todolist. Nothing to do.")
+        return 0
+
+    json_path = md_path.with_suffix(".json")
+    todolist = load_todolist_json(json_path)
+    metadata_by_key = {f"{i.repo}#{i.number}": i for i in todolist.items}
+
+    pr_callback = pr_decision_callback or _default_pr_decision
+    if args.auto_submit:
+        pr_callback = lambda r, b: PRDecision.YES  # noqa: E731
+
+    for ref in checked_refs:
+        key = f"{ref.repo}#{ref.number}"
+        item = metadata_by_key.get(key)
+        if item is None:
+            print(f"{key}: not in todolist JSON; skipping")
+            continue
+        issue = Issue(ref=ref, title=item.title, body=item.body)
+        now = datetime.now(timezone.utc)
+
+        try:
+            workspace = workspace_manager.clone(ref, upstream_url=upstream_url_for(ref.repo))
+        except Exception as exc:
+            state.record_attempt(
+                ref, outcome=AttemptOutcome.ERROR, branch=None, now=now,
+                give_up_reason=f"clone failed: {exc}",
+            )
+            print(f"{key}: clone failed ({exc})")
+            continue
+
+        result = openhands_runner.run(issue=issue, workspace=workspace)
+        if not result.success:
+            outcome = AttemptOutcome.GAVE_UP if result.gave_up else AttemptOutcome.ERROR
+            state.record_attempt(
+                ref, outcome=outcome, branch=None, now=now,
+                give_up_reason=result.reason,
+            )
+            print(f"{key}: skipped ({result.reason})")
+            continue
+
+        branch = f"af-fix/issue-{ref.number}-{slug(result.summary or issue.title)}"
+        try:
+            workspace_manager.checkout_branch(workspace, branch)
+            workspace_manager.commit_all(workspace, message=f"fix: {result.summary}\n\nFixes #{ref.number}")
+        except Exception as exc:
+            state.record_attempt(
+                ref, outcome=AttemptOutcome.ERROR, branch=branch, now=now,
+                give_up_reason=f"commit failed: {exc}",
+            )
+            print(f"{key}: commit failed ({exc})")
+            continue
+
+        if args.no_push or args.dry_run:
+            print(f"{key}: would push {branch} (skipped)")
+            continue
+
+        decision = pr_callback(result, branch)
+        if decision is PRDecision.NO:
+            state.record_attempt(
+                ref, outcome=AttemptOutcome.GAVE_UP, branch=branch, now=now,
+                give_up_reason="user-rejected",
+            )
+            print(f"{key}: PR skipped (user-rejected)")
+            continue
+        if decision is PRDecision.EDIT:
+            print(f"{key}: workspace + branch retained at {workspace} (no state record)")
+            continue
+
+        try:
+            pr = pr_submitter.submit(result, branch=branch)
+            state.record_attempt(
+                ref, outcome=AttemptOutcome.PR_OPENED, branch=branch, now=now, pr_url=pr.url,
+            )
+            print(f"{key}: PR opened — {pr.url}")
+        except Exception as exc:
+            state.record_attempt(
+                ref, outcome=AttemptOutcome.ERROR, branch=branch, now=now,
+                give_up_reason=f"submit failed: {exc}",
+            )
+            print(f"{key}: submit failed ({exc})")
+
+    state.save()
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     refuse_in_ci()
-    parser = build_parser()
-    args = parser.parse_args(argv)
+    args = parse_args_with_compat(argv)
 
     # Lazy imports — keep CLI import lightweight
     from af_fix.config import Config
@@ -232,26 +416,59 @@ def main(argv: list[str] | None = None) -> int:
     state = State.load(state_path)
 
     github = GitHubClient(token=cfg.github_token)
-    target_repos = args.repos.split(",") if args.repos else cfg.target_repos
 
+    def upstream_url_for(repo: str) -> str:
+        return f"https://github.com/{repo}.git"
+
+    if args.command == "triage":
+        target_repos = args.repos.split(",") if args.repos else cfg.target_repos
+        chat_client = _build_chat_client(cfg)
+        triage_agent = TriageAgent(client=chat_client)
+        return triage_pipeline(
+            args=args,
+            target_repos=target_repos,
+            github=github,
+            state=state,
+            triage_agent=triage_agent,
+        )
+
+    if args.command == "execute":
+        runner = OpenHandsRunner(
+            anthropic_api_key=cfg.anthropic_api_key,
+            model=cfg.fix_model,
+            max_iterations=cfg.openhands_max_iterations,
+            openhands_image=cfg.openhands_image,
+        )
+        workspace_manager = WorkspaceManager(root=Path.home() / ".af-fix" / "workspaces")
+        pr_submitter = PRSubmitter(github=github, workspace_manager=workspace_manager, fork_owner=cfg.fork_owner)
+        pr_submitter.verify_fork_owner()
+        return execute_pipeline(
+            args=args,
+            github=github,
+            state=state,
+            state_path=state_path,
+            openhands_runner=runner,
+            workspace_manager=workspace_manager,
+            pr_submitter=pr_submitter,
+            upstream_url_for=upstream_url_for,
+        )
+
+    # Default: command == "run"
+    target_repos = args.repos.split(",") if args.repos else cfg.target_repos
     chat_client = _build_chat_client(cfg)
     triage_agent = TriageAgent(client=chat_client)
-
     runner = OpenHandsRunner(
         anthropic_api_key=cfg.anthropic_api_key,
         model=cfg.fix_model,
         max_iterations=cfg.openhands_max_iterations,
         openhands_image=cfg.openhands_image,
     )
-
     workspace_manager = WorkspaceManager(root=Path.home() / ".af-fix" / "workspaces")
     pr_submitter = PRSubmitter(github=github, workspace_manager=workspace_manager, fork_owner=cfg.fork_owner)
-
     pr_submitter.verify_fork_owner()
 
-    def upstream_url_for(repo: str) -> str:
-        return f"https://github.com/{repo}.git"
-
+    pr_callback: Callable[[Any, str], PRDecision]
+    pr_callback = (lambda r, b: PRDecision.YES) if args.auto_submit else _default_pr_decision
     return run_pipeline(
         args=args,
         target_repos=target_repos,
@@ -263,6 +480,7 @@ def main(argv: list[str] | None = None) -> int:
         workspace_manager=workspace_manager,
         pr_submitter=pr_submitter,
         upstream_url_for=upstream_url_for,
+        pr_decision_callback=pr_callback,
     )
 
 
