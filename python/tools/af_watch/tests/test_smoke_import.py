@@ -7,8 +7,12 @@ def test_package_imports() -> None:
 
 def test_exception_hierarchy() -> None:
     from af_watch.exceptions import (
-        AFWatchError, ConfigError, CorpusError,
-        FeedError, ReasoningError, ReportError,
+        AFWatchError,
+        ConfigError,
+        CorpusError,
+        FeedError,
+        ReasoningError,
+        ReportError,
     )
     assert issubclass(ConfigError, AFWatchError)
     assert issubclass(CorpusError, AFWatchError)
