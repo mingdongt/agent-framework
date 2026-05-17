@@ -27,6 +27,10 @@ def fetch_issues(gh: Any, store: EventStore, *, repo: str, since: datetime) -> i
             closed_at=issue.get("closed_at"),
             url=issue["url"],
         )
+        log.debug(
+            "fetch_issues %s: issue #%d %r (state=%s, labels=%r)",
+            repo, issue["number"], issue["title"], issue["state"], issue["labels"]
+        )
         store.insert(rec)
         count += 1
     return count

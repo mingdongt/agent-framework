@@ -58,5 +58,5 @@ def answer(
         "Keep answers under 300 words unless asked for depth."
     )
     user = f"## Question\n{question}\n\n## Context\n{context}"
-    resp = llm.complete(system=system, user=user)
+    resp = llm.complete(system=system, user=user, caller_label="ask.answer")
     return resp.text

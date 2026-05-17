@@ -26,6 +26,7 @@ def fetch_releases(gh: Any, store: EventStore, *, repo: str, since: datetime) ->
             updated_at=rel["updated_at"],
             url=rel["url"],
         )
+        log.info("fetch_releases %s: release %r", repo, rel["title"])
         store.insert(rec)
         count += 1
     return count

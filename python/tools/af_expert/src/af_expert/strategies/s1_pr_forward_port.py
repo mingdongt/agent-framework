@@ -143,10 +143,15 @@ class PRForwardPortStrategy(Strategy):
         prompt = extract_pattern_prompt(
             title=pr["title"], body=pr.get("body") or "", diff=pr.get("diff") or ""
         )
+        log.debug(
+            "S1 _extract_pattern: PR %s#%d, title=%r, diff=%d chars",
+            pr.get("repo"), pr["number"], pr["title"], len(pr.get("diff") or "")
+        )
         try:
             resp = self.llm.complete(
                 system="You are a senior engineer who extracts bug patterns from PR diffs.",
                 user=prompt,
+                caller_label=f"s1.extract_pattern[{pr['repo']}#{pr['number']}]",
             )
             data = parse_json_block(resp.text)
             return BugPattern(
@@ -164,6 +169,7 @@ class PRForwardPortStrategy(Strategy):
             resp = self.llm.complete(
                 system="You are evaluating whether a known bug pattern exists in a given repository.",
                 user=match_prompt(pattern=pattern, target_repo=target_repo),
+                caller_label=f"s1.match[{target_repo}]",
             )
             return parse_json_block(resp.text)
         except Exception as e:

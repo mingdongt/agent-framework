@@ -135,6 +135,14 @@ def tick(include_archaeology: bool) -> None:
         digest_path.write_text(digest_md)
         click.echo(f"Digest written to {digest_path}")
 
+        # After digest:
+        trace_dir = sd.root / "traces"
+        if trace_dir.exists():
+            trace_file = trace_dir / f"{now.date().isoformat()}.jsonl"
+            if trace_file.exists():
+                size_kb = trace_file.stat().st_size // 1024
+                click.echo(f"LLM trace: {trace_file} ({size_kb} KB)")
+
 
 @cli.command()
 @click.option("--since", default="1d", help="duration like '1d', '7d', '24h'")

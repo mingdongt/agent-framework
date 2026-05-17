@@ -108,6 +108,32 @@ To silence INFO logs (only show errors):
 $env:AF_EXPERT_LOG_LEVEL = "WARNING"
 ```
 
+### Deep trace (LLM I/O)
+
+Every LLM call is logged to a JSONL trace file at `~/.af-expert/traces/<date>.jsonl`
+with: timestamp, caller label (e.g. `s1.extract_pattern[microsoft/agent-framework#5784]`),
+model, system/user preview, full response, and token usage. To inspect:
+
+```bash
+# All today's LLM calls
+type $env:USERPROFILE\.af-expert\traces\2026-05-18.jsonl
+
+# Or pipe through jq for readable output
+type $env:USERPROFILE\.af-expert\traces\2026-05-18.jsonl | jq '.caller, .response'
+```
+
+To disable trace writing (e.g., for tests):
+
+```bash
+$env:AF_EXPERT_TRACE_DISABLED = "1"
+```
+
+To redirect to a custom path:
+
+```bash
+$env:AF_EXPERT_TRACE_FILE = "C:\path\to\trace.jsonl"
+```
+
 ## Troubleshooting
 
 - `StateLockError`: another `af-expert` process is running, or a previous

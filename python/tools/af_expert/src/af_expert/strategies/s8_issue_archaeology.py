@@ -88,10 +88,15 @@ class IssueArchaeologyStrategy(Strategy):
         return produced
 
     def _evaluate(self, repo: str, issue: dict[str, Any]) -> dict[str, Any] | None:
+        log.debug(
+            "S8 _evaluate: %s#%s, title=%r, labels=%r",
+            repo, issue.get("number"), issue.get("title"), issue.get("labels")
+        )
         try:
             resp = self.llm.complete(
                 system="You are an OSS contributor evaluating closed issues for re-opening.",
                 user=archaeology_prompt(repo=repo, issue=issue),
+                caller_label=f"s8.evaluate[{repo}#{issue.get('number')}]",
             )
             return parse_json_block(resp.text)
         except Exception as e:
