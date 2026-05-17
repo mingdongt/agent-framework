@@ -1,0 +1,37 @@
+# Phase 1 seed: 3 example entries. Operator extends via corpus refresh.
+
+mcp_cross_origin_header_strip:
+  description: "MCP client strips Authorization on cross-origin redirect"
+  importance: security
+  spec_reference: "MCP 2025-06 draft, OAuth section"
+  frameworks:
+    microsoft/agent-framework:
+      status: not_implemented
+      evidence: "seed placeholder"
+      last_checked: 2026-05-18
+    google/adk-python:
+      status: implemented
+      evidence: "seed placeholder"
+      last_checked: 2026-05-18
+
+gemini_3_thinking_blocks:
+  description: "Parse Gemini 3 thinking_blocks (no per-block signature)"
+  importance: provider_keep_up
+  frameworks:
+    microsoft/agent-framework:
+      status: not_implemented
+      evidence: "seed placeholder"
+      last_checked: 2026-05-18
+    google/adk-python:
+      status: in_progress
+      evidence: "seed placeholder"
+      last_checked: 2026-05-18
+
+anthropic_thinking_signature_preservation:
+  description: "Preserve Anthropic thinking signature across tool-call boundaries"
+  importance: provider_keep_up
+  frameworks:
+    microsoft/agent-framework:
+      status: implemented
+      evidence: "seed placeholder"
+      last_checked: 2026-05-18
