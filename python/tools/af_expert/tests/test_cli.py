@@ -241,3 +241,16 @@ def test_tick_with_hypotheses_flag(tmp_state_dir) -> None:
     runner = CliRunner()
     result = runner.invoke(cli, ["tick", "--help"])
     assert "--include-hypotheses" in result.output
+
+
+def test_spec_list_command(tmp_state_dir) -> None:
+    runner = CliRunner()
+    result = runner.invoke(cli, ["spec", "list"])
+    assert result.exit_code == 0
+    assert "mcp/duplicate_initialize_rejected" in result.output
+
+
+def test_tick_with_conformance_flag(tmp_state_dir) -> None:
+    runner = CliRunner()
+    result = runner.invoke(cli, ["tick", "--help"])
+    assert "--include-conformance" in result.output

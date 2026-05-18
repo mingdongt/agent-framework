@@ -40,6 +40,7 @@ from af_expert.strategies.s8_issue_archaeology import IssueArchaeologyStrategy
 from af_expert.hypothesis.model import Hypothesis
 from af_expert.hypothesis.store import HypothesisStore
 from af_expert.strategies.s3_hypothesis_verify import HypothesisVerifyStrategy
+from af_expert.strategies.s5_spec_conformance import SpecConformanceStrategy
 import uuid
 
 
@@ -97,6 +98,7 @@ def init() -> None:
 @click.option("--include-structural", is_flag=True, default=False, help="Run S2 structural diff")
 @click.option("--include-propagation", is_flag=True, default=False, help="Run S7 feature propagation")
 @click.option("--include-hypotheses", is_flag=True, default=False, help="Run S3 hypothesis verification")
+@click.option("--include-conformance", is_flag=True, default=False, help="Run S5 spec conformance")
 @click.option(
     "--strategies-only",
     is_flag=True,
@@ -106,6 +108,7 @@ def init() -> None:
 def tick(
     include_archaeology: bool, include_providers: bool, include_health: bool,
     include_structural: bool, include_propagation: bool, include_hypotheses: bool,
+    include_conformance: bool,
     strategies_only: bool,
 ) -> None:
     """Run one ingestion + strategy tick."""
@@ -208,6 +211,12 @@ def tick(
             s3_produced = s3.on_ingestion_complete(deltas)
             click.echo(f"S3 (hypothesis verify) produced {len(s3_produced)} candidates")
             all_produced.extend(s3_produced)
+
+        if include_conformance:
+            s5 = SpecConformanceStrategy(config=cfg, events=events, candidates=candidates, llm=llm)
+            s5_produced = s5.on_weekly_tick(now=now)
+            click.echo(f"S5 (spec conformance) produced {len(s5_produced)} candidates")
+            all_produced.extend(s5_produced)
 
         digest_md = render_digest(
             since=since,
@@ -418,11 +427,12 @@ def strategy() -> None:
 
 @strategy.command("list")
 def strategy_list() -> None:
-    click.echo("Strategies (Wave 1 + 2 + 3 + 4):")
+    click.echo("Strategies (Wave 1 + 2 + 3 + 4 + 5):")
     click.echo("  s1_pr_forward_port      (on-tick)")
     click.echo("  s2_structural_diff      (on-tick with --include-structural)")
     click.echo("  s3_hypothesis_verify    (on-tick with --include-hypotheses)")
     click.echo("  s4_provider_release     (on-tick with --include-providers)")
+    click.echo("  s5_spec_conformance     (on-tick with --include-conformance)")
     click.echo("  s6_maintainer_health    (on-tick with --include-health)")
     click.echo("  s7_feature_propagation  (on-tick with --include-propagation)")
     click.echo("  s8_issue_archaeology    (on-demand or with --include-archaeology)")
@@ -480,9 +490,43 @@ def strategy_run(name: str, repo: str | None) -> None:
             since=datetime.now(tz=timezone.utc), repos_with_new_prs=[r.owner_repo for r in cfg.repos],
         ))
         click.echo(f"S3: {len(produced)} candidates")
+    elif name == "s5_spec_conformance":
+        s5 = SpecConformanceStrategy(config=cfg, events=events, candidates=candidates, llm=llm)
+        produced = s5.on_weekly_tick()
+        click.echo(f"S5: {len(produced)} candidates")
     else:
         click.echo(f"Strategy '{name}' not recognized", err=True)
         sys.exit(2)
+
+
+@cli.group()
+def spec() -> None:
+    """Spec corpus management."""
+
+
+@spec.command("list")
+def spec_list() -> None:
+    from af_expert.spec_corpus.mcp import MCP_PROPERTIES
+    click.echo("Spec properties:")
+    for p in MCP_PROPERTIES:
+        click.echo(f"  {p.full_id}\t{p.description}")
+
+
+@spec.command("run")
+@click.option("--framework", default=None)
+def spec_run(framework: str | None) -> None:
+    """Run the spec corpus against one (or all) tracked framework(s)."""
+    cfg = load_config()
+    events = EventStore(); events.ensure_schema()
+    candidates = CandidateStore()
+    llm = LLM(api_key=cfg.anthropic_api_key)
+    strat = SpecConformanceStrategy(config=cfg, events=events, candidates=candidates, llm=llm)
+    # Filter by framework if provided
+    if framework:
+        original = strat.adapter_registry
+        strat.adapter_registry = {framework: a for f, a in original.items() if f == framework}
+    produced = strat.on_weekly_tick()
+    click.echo(f"S5: {len(produced)} candidates")
 
 
 @cli.group()
