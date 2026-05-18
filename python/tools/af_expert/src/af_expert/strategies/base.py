@@ -42,7 +42,7 @@ class Strategy(ABC):
     def on_ingestion_complete(self, deltas: IngestionDeltas) -> list[Candidate]:
         """Called after the daily tick finishes ingestion. Return new candidates."""
 
-    def on_weekly_tick(self) -> list[Candidate]:
+    def on_weekly_tick(self, now: datetime | None = None) -> list[Candidate]:
         """Override for strategies that run weekly (e.g., S5). Default: no-op."""
         return []
 
