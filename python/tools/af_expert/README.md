@@ -9,7 +9,7 @@ and produces a ranked candidate list you can review.
 For end-to-end fixing+PRs of the candidates you select, pipe them to
 [af-fix](../af_fix/) via `af-expert candidate export <id>`.
 
-**Status: Wave 3 (core platform + S1 + S2 + S4 + S6 + S7 + S8 + concept graph).**
+**Status: Wave 4 (core platform + S1 + S2 + S3 + S4 + S6 + S7 + S8 + concept graph + hypothesis tracker).**
 See [spec](../../../docs/superpowers/specs/2026-05-17-af-expert-design.md)
 for the full 5-wave plan.
 
@@ -115,6 +115,31 @@ af-expert strategy run s2_structural_diff
 af-expert strategy run s7_feature_propagation
 ```
 
+### Wave 4 commands
+
+```bash
+# Add a hypothesis to track
+af-expert hypothesis add "MCP OAuth refresh-token grants in most frameworks send the resource parameter, violating RFC 8707 §2.2"
+
+# List active hypotheses
+af-expert hypothesis list
+
+# List all hypotheses including archived
+af-expert hypothesis list --archived
+
+# Show full details for one hypothesis
+af-expert hypothesis show h-abc12345
+
+# Archive a hypothesis (no longer verifies)
+af-expert hypothesis archive h-abc12345
+
+# Tick with S3 hypothesis verification enabled (verifies one hypothesis×repo pair per run)
+af-expert tick --include-hypotheses
+
+# Run S3 strategy manually
+af-expert strategy run s3_hypothesis_verify
+```
+
 ## State layout
 
 ```
@@ -127,6 +152,7 @@ af-expert strategy run s7_feature_propagation
 ├── digests/
 ├── traces/
 ├── concept_graph.json    # Wave 3: hand-curated concepts + per-repo impl links
+├── hypotheses.json       # Wave 4: operator-submitted hypotheses + verification results
 ├── repos/<owner>__<repo>/
 │   └── architecture.md
 └── providers/<provider>/
@@ -152,9 +178,27 @@ Wave 3 adds:
 ~/.af-expert/concept_graph.json   # single-file JSON, atomic writes
 ```
 
-### Still TBD (Wave 4+)
+## Wave 4 status
 
-- S3 hypothesis verification
+Wave 4 adds:
+
+- **Hypothesis tracker**: operator (or LLM) can submit hypotheses like
+  "MCP OAuth refresh-token grants violate RFC 8707". Stored as JSON at
+  `~/.af-expert/hypotheses.json` with atomic writes.
+- **S3 hypothesis verification**: each `tick --include-hypotheses` run picks one
+  unverified `(hypothesis × repo)` pair, fetches the repo's architecture briefing
+  (if available), and asks the LLM to judge compliance. Verified pairs are cached;
+  non-compliant verdicts emit candidates. Once all repos in a hypothesis are
+  verified, the hypothesis can be archived.
+
+### Hypothesis store layout
+
+```
+~/.af-expert/hypotheses.json   # single-file JSON, atomic writes
+```
+
+### Still TBD (Wave 5+)
+
 - S5 spec conformance fuzzer
 
 ## Verbose logging
