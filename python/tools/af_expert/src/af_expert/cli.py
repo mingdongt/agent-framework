@@ -37,6 +37,10 @@ from af_expert.strategies.s4_provider_release import ProviderReleaseStrategy
 from af_expert.strategies.s6_maintainer_health import MaintainerHealthStrategy
 from af_expert.strategies.s7_feature_propagation import FeaturePropagationStrategy
 from af_expert.strategies.s8_issue_archaeology import IssueArchaeologyStrategy
+from af_expert.hypothesis.model import Hypothesis
+from af_expert.hypothesis.store import HypothesisStore
+from af_expert.strategies.s3_hypothesis_verify import HypothesisVerifyStrategy
+import uuid
 
 
 DEFAULT_CONFIG_BODY = """\
@@ -92,6 +96,7 @@ def init() -> None:
 @click.option("--include-health", is_flag=True, default=False, help="Run S6 maintainer health strategy")
 @click.option("--include-structural", is_flag=True, default=False, help="Run S2 structural diff")
 @click.option("--include-propagation", is_flag=True, default=False, help="Run S7 feature propagation")
+@click.option("--include-hypotheses", is_flag=True, default=False, help="Run S3 hypothesis verification")
 @click.option(
     "--strategies-only",
     is_flag=True,
@@ -100,7 +105,8 @@ def init() -> None:
 )
 def tick(
     include_archaeology: bool, include_providers: bool, include_health: bool,
-    include_structural: bool, include_propagation: bool, strategies_only: bool,
+    include_structural: bool, include_propagation: bool, include_hypotheses: bool,
+    strategies_only: bool,
 ) -> None:
     """Run one ingestion + strategy tick."""
     cfg = load_config()
@@ -193,6 +199,15 @@ def tick(
                 s8_produced.extend(s8.on_demand({"repo": repo_cfg.owner_repo}))
             click.echo(f"S8 (issue archaeology) produced {len(s8_produced)} candidates")
             all_produced.extend(s8_produced)
+
+        if include_hypotheses:
+            hyp_store = HypothesisStore()
+            s3 = HypothesisVerifyStrategy(
+                config=cfg, events=events, candidates=candidates, llm=llm, hypothesis_store=hyp_store
+            )
+            s3_produced = s3.on_ingestion_complete(deltas)
+            click.echo(f"S3 (hypothesis verify) produced {len(s3_produced)} candidates")
+            all_produced.extend(s3_produced)
 
         digest_md = render_digest(
             since=since,
@@ -403,9 +418,10 @@ def strategy() -> None:
 
 @strategy.command("list")
 def strategy_list() -> None:
-    click.echo("Strategies (Wave 1 + 2 + 3):")
+    click.echo("Strategies (Wave 1 + 2 + 3 + 4):")
     click.echo("  s1_pr_forward_port      (on-tick)")
     click.echo("  s2_structural_diff      (on-tick with --include-structural)")
+    click.echo("  s3_hypothesis_verify    (on-tick with --include-hypotheses)")
     click.echo("  s4_provider_release     (on-tick with --include-providers)")
     click.echo("  s6_maintainer_health    (on-tick with --include-health)")
     click.echo("  s7_feature_propagation  (on-tick with --include-propagation)")
@@ -455,9 +471,70 @@ def strategy_run(name: str, repo: str | None) -> None:
             repos_with_new_prs=[r.owner_repo for r in cfg.repos],
         ))
         click.echo(f"S7: {len(produced)} candidates")
+    elif name == "s3_hypothesis_verify":
+        hyp_store = HypothesisStore()
+        s3 = HypothesisVerifyStrategy(
+            config=cfg, events=events, candidates=candidates, llm=llm, hypothesis_store=hyp_store
+        )
+        produced = s3.on_ingestion_complete(IngestionDeltas(
+            since=datetime.now(tz=timezone.utc), repos_with_new_prs=[r.owner_repo for r in cfg.repos],
+        ))
+        click.echo(f"S3: {len(produced)} candidates")
     else:
         click.echo(f"Strategy '{name}' not recognized", err=True)
         sys.exit(2)
+
+
+@cli.group()
+def hypothesis() -> None:
+    """Active hypothesis management."""
+
+
+@hypothesis.command("add")
+@click.argument("statement")
+def hypothesis_add(statement: str) -> None:
+    store = HypothesisStore()
+    new_id = f"h-{uuid.uuid4().hex[:8]}"
+    h = Hypothesis(
+        id=new_id,
+        statement=statement,
+        proposed_by="operator",
+        created_at=datetime.now(tz=timezone.utc),
+    )
+    store.upsert(h)
+    click.echo(f"Added {new_id}")
+
+
+@hypothesis.command("list")
+@click.option("--archived", is_flag=True, default=False)
+def hypothesis_list(archived: bool) -> None:
+    store = HypothesisStore()
+    items = store.list_all() if archived else store.list_active()
+    if not items:
+        click.echo("(no hypotheses)")
+        return
+    for h in items:
+        verified = len(h.verifications)
+        click.echo(f"  {h.id}\t[{h.status}]\t{verified} verified\t{h.statement[:80]}")
+
+
+@hypothesis.command("show")
+@click.argument("hid")
+def hypothesis_show(hid: str) -> None:
+    store = HypothesisStore()
+    h = store.get(hid)
+    if h is None:
+        click.echo(f"hypothesis {hid!r} not found", err=True)
+        sys.exit(2)
+    click.echo(h.model_dump_json(indent=2))
+
+
+@hypothesis.command("archive")
+@click.argument("hid")
+def hypothesis_archive(hid: str) -> None:
+    store = HypothesisStore()
+    store.archive(hid)
+    click.echo(f"Archived {hid}")
 
 
 @cli.command()

@@ -219,3 +219,25 @@ def test_tick_with_structural_and_propagation_flags(tmp_state_dir) -> None:
     result = runner.invoke(cli, ["tick", "--help"])
     assert "--include-structural" in result.output
     assert "--include-propagation" in result.output
+
+
+def test_hypothesis_add_and_list(tmp_state_dir) -> None:
+    cfg_path = tmp_state_dir / "config.toml"
+    cfg_path.write_text(
+        'github_token = "x"\nanthropic_api_key = "y"\n\n'
+        '[[repos]]\nowner_repo = "a/b"\n'
+    )
+    runner = CliRunner()
+    result_add = runner.invoke(cli, ["hypothesis", "add", "MCP OAuth grants violate RFC 8707"])
+    assert result_add.exit_code == 0
+    assert "Added" in result_add.output
+
+    result_list = runner.invoke(cli, ["hypothesis", "list"])
+    assert result_list.exit_code == 0
+    assert "MCP OAuth" in result_list.output
+
+
+def test_tick_with_hypotheses_flag(tmp_state_dir) -> None:
+    runner = CliRunner()
+    result = runner.invoke(cli, ["tick", "--help"])
+    assert "--include-hypotheses" in result.output
