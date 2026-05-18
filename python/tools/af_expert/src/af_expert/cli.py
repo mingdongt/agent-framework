@@ -26,8 +26,11 @@ from af_expert.llm import LLM
 from af_expert.query.ask import answer
 from af_expert.query.digest import render_digest
 from af_expert.state import StateDir, load_state, save_state
+from af_expert.architecture.refresh import refresh_one_repo
 from af_expert.strategies.base import IngestionDeltas
 from af_expert.strategies.s1_pr_forward_port import PRForwardPortStrategy
+from af_expert.strategies.s4_provider_release import ProviderReleaseStrategy
+from af_expert.strategies.s6_maintainer_health import MaintainerHealthStrategy
 from af_expert.strategies.s8_issue_archaeology import IssueArchaeologyStrategy
 
 
@@ -80,7 +83,15 @@ def init() -> None:
 
 @cli.command()
 @click.option("--include-archaeology", is_flag=True, default=False)
-def tick(include_archaeology: bool) -> None:
+@click.option("--include-providers", is_flag=True, default=False, help="Run S4 provider release strategy")
+@click.option("--include-health", is_flag=True, default=False, help="Run S6 maintainer health strategy")
+@click.option(
+    "--strategies-only",
+    is_flag=True,
+    default=False,
+    help="Skip ingestion; run strategies against already-ingested events in DB.",
+)
+def tick(include_archaeology: bool, include_providers: bool, include_health: bool, strategies_only: bool) -> None:
     """Run one ingestion + strategy tick."""
     cfg = load_config()
     sd = StateDir()
@@ -88,60 +99,115 @@ def tick(include_archaeology: bool) -> None:
     events = EventStore()
     events.ensure_schema()
     candidates = CandidateStore()
-    gh = GitHubClient(token=cfg.github_token)
     llm = LLM(api_key=cfg.anthropic_api_key)
 
     with sd.lock():
         now = datetime.now(tz=timezone.utc)
-        # Strategies look at events from the last 7 days regardless of where
-        # individual repo cursors are. This is a Wave 1 simplification; Wave 2
-        # uses per-repo deltas from architecture-change-detection.
-        since = now - timedelta(days=7)
 
-        result = run_ingestion_tick(
-            cfg, gh, events, now=now, load_state=load_state, save_state=save_state
-        )
-        click.echo(
-            f"Ingestion: {result.repos_succeeded} ok, "
-            f"{result.repos_failed} failed, {result.new_events} new events"
-        )
+        if strategies_only:
+            # Skip ingestion entirely. Build IngestionDeltas from existing DB state:
+            # - since = oldest cursor across all repos (widest possible query window)
+            # - repos_with_new_prs = all configured repos (every strategy runs on every repo)
+            state = load_state()
+            cursors = state.get("cursors", {})
+            all_repos = [r.owner_repo for r in cfg.repos]
+            if cursors:
+                since = min(
+                    datetime.fromisoformat(ts) for ts in cursors.values()
+                )
+            else:
+                # No cursors yet — fall back to 7-day window so strategies still run
+                since = now - timedelta(days=7)
+            deltas = IngestionDeltas(since=since, repos_with_new_prs=all_repos)
+            click.echo("Ingestion: skipped (--strategies-only)")
+            ingestion_summary: dict[str, int] = {"repos_succeeded": 0, "repos_failed": 0, "new_events": 0}
+        else:
+            gh = GitHubClient(token=cfg.github_token)
+            since = now - timedelta(days=7)
 
-        repos_with_new_prs = [r.owner_repo for r in cfg.repos if r.owner_repo not in result.failed_repos]
+            result = run_ingestion_tick(
+                cfg, gh, events, now=now, load_state=load_state, save_state=save_state
+            )
+            click.echo(
+                f"Ingestion: {result.repos_succeeded} ok, "
+                f"{result.repos_failed} failed, {result.new_events} new events"
+            )
 
-        deltas = IngestionDeltas(since=since, repos_with_new_prs=repos_with_new_prs)
+            repos_with_new_prs = [r.owner_repo for r in cfg.repos if r.owner_repo not in result.failed_repos]
+            deltas = IngestionDeltas(since=since, repos_with_new_prs=repos_with_new_prs)
+            ingestion_summary = {
+                "repos_succeeded": result.repos_succeeded,
+                "repos_failed": result.repos_failed,
+                "new_events": result.new_events,
+            }
 
         s1 = PRForwardPortStrategy(config=cfg, events=events, candidates=candidates, llm=llm)
         s1_produced = s1.on_ingestion_complete(deltas)
         click.echo(f"S1 (PR forward-port) produced {len(s1_produced)} candidates")
 
-        s8_produced: list = []
+        all_produced = list(s1_produced)
+
+        if include_providers:
+            s4 = ProviderReleaseStrategy(config=cfg, events=events, candidates=candidates, llm=llm)
+            s4_produced = s4.on_ingestion_complete(deltas)
+            click.echo(f"S4 (provider release) produced {len(s4_produced)} candidates")
+            all_produced.extend(s4_produced)
+
+        if include_health:
+            s6 = MaintainerHealthStrategy(config=cfg, events=events, candidates=candidates, llm=llm)
+            s6_produced = s6.on_weekly_tick(now=now)
+            click.echo(f"S6 (maintainer health) produced {len(s6_produced)} candidates")
+            all_produced.extend(s6_produced)
+
         if include_archaeology:
             s8 = IssueArchaeologyStrategy(config=cfg, events=events, candidates=candidates, llm=llm)
+            s8_produced: list = []
             for repo_cfg in cfg.repos:
                 s8_produced.extend(s8.on_demand({"repo": repo_cfg.owner_repo}))
             click.echo(f"S8 (issue archaeology) produced {len(s8_produced)} candidates")
+            all_produced.extend(s8_produced)
 
         digest_md = render_digest(
             since=since,
-            candidates=s1_produced + s8_produced,
-            ingestion_summary={
-                "repos_succeeded": result.repos_succeeded,
-                "repos_failed": result.repos_failed,
-                "new_events": result.new_events,
-            },
+            candidates=all_produced,
+            ingestion_summary=ingestion_summary,
         )
         digest_path = sd.root / "digests" / f"{now.date().isoformat()}.md"
         digest_path.parent.mkdir(parents=True, exist_ok=True)
         digest_path.write_text(digest_md)
         click.echo(f"Digest written to {digest_path}")
 
-        # After digest:
         trace_dir = sd.root / "traces"
         if trace_dir.exists():
             trace_file = trace_dir / f"{now.date().isoformat()}.jsonl"
             if trace_file.exists():
                 size_kb = trace_file.stat().st_size // 1024
                 click.echo(f"LLM trace: {trace_file} ({size_kb} KB)")
+
+
+@cli.command()
+@click.argument("repo", required=False)
+@click.option("--all", "refresh_all", is_flag=True, default=False, help="Refresh all configured repos")
+def refresh(repo: str | None, refresh_all: bool) -> None:
+    """Refresh architecture briefing for one or all repos."""
+    cfg = load_config()
+    llm = LLM(api_key=cfg.anthropic_api_key)
+
+    if refresh_all:
+        targets = [r.owner_repo for r in cfg.repos]
+    elif repo:
+        targets = [repo]
+    else:
+        click.echo("Provide a repo name or --all", err=True)
+        sys.exit(2)
+
+    for target in targets:
+        click.echo(f"Refreshing {target}...")
+        result = refresh_one_repo(target, llm=llm)
+        if result.success:
+            click.echo(f"  OK briefing written to {result.briefing_path}")
+        else:
+            click.echo(f"  FAILED: {result.error}", err=True)
 
 
 @cli.command()
@@ -239,9 +305,11 @@ def strategy() -> None:
 
 @strategy.command("list")
 def strategy_list() -> None:
-    click.echo("Enabled strategies (Wave 1):")
-    click.echo("  s1_pr_forward_port")
-    click.echo("  s8_issue_archaeology  (on-demand only)")
+    click.echo("Strategies (Wave 1 + 2):")
+    click.echo("  s1_pr_forward_port      (on-tick)")
+    click.echo("  s4_provider_release     (on-tick with --include-providers)")
+    click.echo("  s6_maintainer_health    (on-tick with --include-health)")
+    click.echo("  s8_issue_archaeology    (on-demand or with --include-archaeology)")
 
 
 @strategy.command("run")
@@ -253,6 +321,7 @@ def strategy_run(name: str, repo: str | None) -> None:
     events.ensure_schema()
     candidates = CandidateStore()
     llm = LLM(api_key=cfg.anthropic_api_key)
+
     if name == "s8_issue_archaeology":
         s8 = IssueArchaeologyStrategy(config=cfg, events=events, candidates=candidates, llm=llm)
         targets = [repo] if repo else [r.owner_repo for r in cfg.repos]
@@ -262,8 +331,18 @@ def strategy_run(name: str, repo: str | None) -> None:
             total += len(produced)
             click.echo(f"{r}: {len(produced)} candidates")
         click.echo(f"Total: {total}")
+    elif name == "s4_provider_release":
+        s4 = ProviderReleaseStrategy(config=cfg, events=events, candidates=candidates, llm=llm)
+        produced = s4.on_ingestion_complete(IngestionDeltas(
+            since=datetime.now(tz=timezone.utc), repos_with_new_prs=[r.owner_repo for r in cfg.repos]
+        ))
+        click.echo(f"S4: {len(produced)} candidates")
+    elif name == "s6_maintainer_health":
+        s6 = MaintainerHealthStrategy(config=cfg, events=events, candidates=candidates, llm=llm)
+        produced = s6.on_weekly_tick()
+        click.echo(f"S6: {len(produced)} candidates")
     else:
-        click.echo(f"Strategy '{name}' is not on-demand-runnable in Wave 1", err=True)
+        click.echo(f"Strategy '{name}' not recognized", err=True)
         sys.exit(2)
 
 
