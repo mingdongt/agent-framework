@@ -27,10 +27,15 @@ from af_expert.query.ask import answer
 from af_expert.query.digest import render_digest
 from af_expert.state import StateDir, load_state, save_state
 from af_expert.architecture.refresh import refresh_one_repo
+from af_expert.concept.linker import link_concept_to_repo
+from af_expert.concept.seed import seed_into
+from af_expert.concept.store import ConceptGraphStore
 from af_expert.strategies.base import IngestionDeltas
 from af_expert.strategies.s1_pr_forward_port import PRForwardPortStrategy
+from af_expert.strategies.s2_structural_diff import StructuralDiffStrategy
 from af_expert.strategies.s4_provider_release import ProviderReleaseStrategy
 from af_expert.strategies.s6_maintainer_health import MaintainerHealthStrategy
+from af_expert.strategies.s7_feature_propagation import FeaturePropagationStrategy
 from af_expert.strategies.s8_issue_archaeology import IssueArchaeologyStrategy
 
 
@@ -85,13 +90,18 @@ def init() -> None:
 @click.option("--include-archaeology", is_flag=True, default=False)
 @click.option("--include-providers", is_flag=True, default=False, help="Run S4 provider release strategy")
 @click.option("--include-health", is_flag=True, default=False, help="Run S6 maintainer health strategy")
+@click.option("--include-structural", is_flag=True, default=False, help="Run S2 structural diff")
+@click.option("--include-propagation", is_flag=True, default=False, help="Run S7 feature propagation")
 @click.option(
     "--strategies-only",
     is_flag=True,
     default=False,
     help="Skip ingestion; run strategies against already-ingested events in DB.",
 )
-def tick(include_archaeology: bool, include_providers: bool, include_health: bool, strategies_only: bool) -> None:
+def tick(
+    include_archaeology: bool, include_providers: bool, include_health: bool,
+    include_structural: bool, include_propagation: bool, strategies_only: bool,
+) -> None:
     """Run one ingestion + strategy tick."""
     cfg = load_config()
     sd = StateDir()
@@ -159,6 +169,23 @@ def tick(include_archaeology: bool, include_providers: bool, include_health: boo
             click.echo(f"S6 (maintainer health) produced {len(s6_produced)} candidates")
             all_produced.extend(s6_produced)
 
+        # Construct concept_store once (used by S2)
+        concept_store = ConceptGraphStore()
+
+        if include_structural:
+            s2 = StructuralDiffStrategy(
+                config=cfg, events=events, candidates=candidates, llm=llm, concept_store=concept_store
+            )
+            s2_produced = s2.on_weekly_tick(now=now)
+            click.echo(f"S2 (structural diff) produced {len(s2_produced)} candidates")
+            all_produced.extend(s2_produced)
+
+        if include_propagation:
+            s7 = FeaturePropagationStrategy(config=cfg, events=events, candidates=candidates, llm=llm)
+            s7_produced = s7.on_ingestion_complete(deltas)
+            click.echo(f"S7 (feature propagation) produced {len(s7_produced)} candidates")
+            all_produced.extend(s7_produced)
+
         if include_archaeology:
             s8 = IssueArchaeologyStrategy(config=cfg, events=events, candidates=candidates, llm=llm)
             s8_produced: list = []
@@ -208,6 +235,77 @@ def refresh(repo: str | None, refresh_all: bool) -> None:
             click.echo(f"  OK briefing written to {result.briefing_path}")
         else:
             click.echo(f"  FAILED: {result.error}", err=True)
+
+
+@cli.group()
+def concept() -> None:
+    """Concept graph management."""
+
+
+@concept.command("seed")
+def concept_seed() -> None:
+    store = ConceptGraphStore()
+    n = seed_into(store)
+    click.echo(f"Seeded {n} concepts into {store.path}")
+
+
+@concept.command("list")
+def concept_list() -> None:
+    store = ConceptGraphStore()
+    concepts = store.list_all()
+    if not concepts:
+        click.echo("(concept graph empty — run `af-expert concept seed`)")
+        return
+    for c in concepts:
+        click.echo(f"  {c.id}\t{c.description}")
+
+
+@concept.command("show")
+@click.argument("concept_id")
+def concept_show(concept_id: str) -> None:
+    store = ConceptGraphStore()
+    c = store.get(concept_id)
+    if c is None:
+        click.echo(f"concept {concept_id!r} not found", err=True)
+        sys.exit(2)
+    click.echo(c.model_dump_json(indent=2))
+
+
+@concept.command("link")
+@click.argument("concept_id")
+@click.option("--repo", required=True)
+def concept_link(concept_id: str, repo: str) -> None:
+    from af_expert.architecture.refresh import _clone_repo_shallow
+    from af_expert.architecture.scanner import scan_repo_locally
+    import tempfile
+    from pathlib import Path
+    import shutil
+
+    cfg = load_config()
+    store = ConceptGraphStore()
+    c = store.get(concept_id)
+    if c is None:
+        click.echo(f"concept {concept_id!r} not found; run `af-expert concept seed` first", err=True)
+        sys.exit(2)
+
+    llm = LLM(api_key=cfg.anthropic_api_key)
+    tmp_dir = Path(tempfile.mkdtemp(prefix="af-expert-concept-link-"))
+    try:
+        clone_dir = tmp_dir / repo.split("/")[-1]
+        try:
+            _clone_repo_shallow(repo, clone_dir)
+        except Exception as e:
+            click.echo(f"clone failed: {e}", err=True)
+            sys.exit(2)
+        inv = scan_repo_locally(clone_dir)
+        impl = link_concept_to_repo(repo=repo, concept=c, inventory=inv, llm=llm)
+        if impl is None:
+            click.echo(f"{concept_id} -> {repo}: no link found")
+            return
+        store.attach_implementation(concept_id, impl)
+        click.echo(f"linked {concept_id} -> {repo}: files={impl.files} functions={impl.functions}")
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 @cli.command()
@@ -305,10 +403,12 @@ def strategy() -> None:
 
 @strategy.command("list")
 def strategy_list() -> None:
-    click.echo("Strategies (Wave 1 + 2):")
+    click.echo("Strategies (Wave 1 + 2 + 3):")
     click.echo("  s1_pr_forward_port      (on-tick)")
+    click.echo("  s2_structural_diff      (on-tick with --include-structural)")
     click.echo("  s4_provider_release     (on-tick with --include-providers)")
     click.echo("  s6_maintainer_health    (on-tick with --include-health)")
+    click.echo("  s7_feature_propagation  (on-tick with --include-propagation)")
     click.echo("  s8_issue_archaeology    (on-demand or with --include-archaeology)")
 
 
@@ -321,6 +421,7 @@ def strategy_run(name: str, repo: str | None) -> None:
     events.ensure_schema()
     candidates = CandidateStore()
     llm = LLM(api_key=cfg.anthropic_api_key)
+    concept_store = ConceptGraphStore()
 
     if name == "s8_issue_archaeology":
         s8 = IssueArchaeologyStrategy(config=cfg, events=events, candidates=candidates, llm=llm)
@@ -334,13 +435,26 @@ def strategy_run(name: str, repo: str | None) -> None:
     elif name == "s4_provider_release":
         s4 = ProviderReleaseStrategy(config=cfg, events=events, candidates=candidates, llm=llm)
         produced = s4.on_ingestion_complete(IngestionDeltas(
-            since=datetime.now(tz=timezone.utc), repos_with_new_prs=[r.owner_repo for r in cfg.repos]
+            since=datetime.now(tz=timezone.utc), repos_with_new_prs=[r.owner_repo for r in cfg.repos],
         ))
         click.echo(f"S4: {len(produced)} candidates")
     elif name == "s6_maintainer_health":
         s6 = MaintainerHealthStrategy(config=cfg, events=events, candidates=candidates, llm=llm)
         produced = s6.on_weekly_tick()
         click.echo(f"S6: {len(produced)} candidates")
+    elif name == "s2_structural_diff":
+        s2 = StructuralDiffStrategy(
+            config=cfg, events=events, candidates=candidates, llm=llm, concept_store=concept_store
+        )
+        produced = s2.on_weekly_tick()
+        click.echo(f"S2: {len(produced)} candidates")
+    elif name == "s7_feature_propagation":
+        s7 = FeaturePropagationStrategy(config=cfg, events=events, candidates=candidates, llm=llm)
+        produced = s7.on_ingestion_complete(IngestionDeltas(
+            since=datetime.now(tz=timezone.utc) - timedelta(days=7),
+            repos_with_new_prs=[r.owner_repo for r in cfg.repos],
+        ))
+        click.echo(f"S7: {len(produced)} candidates")
     else:
         click.echo(f"Strategy '{name}' not recognized", err=True)
         sys.exit(2)

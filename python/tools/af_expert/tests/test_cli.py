@@ -187,3 +187,35 @@ def test_tick_with_s4_s6_flags(tmp_state_dir) -> None:
     result = runner.invoke(cli, ["tick", "--help"])
     assert "--include-providers" in result.output
     assert "--include-health" in result.output
+
+
+def test_concept_seed_command(tmp_state_dir, monkeypatch) -> None:
+    cfg_path = tmp_state_dir / "config.toml"
+    cfg_path.write_text(
+        'github_token = "x"\nanthropic_api_key = "y"\n\n'
+        '[[repos]]\nowner_repo = "a/b"\n'
+    )
+    runner = CliRunner()
+    result = runner.invoke(cli, ["concept", "seed"])
+    assert result.exit_code == 0
+    assert "seeded" in result.output.lower() or "concepts" in result.output.lower()
+
+
+def test_concept_list_command(tmp_state_dir) -> None:
+    cfg_path = tmp_state_dir / "config.toml"
+    cfg_path.write_text(
+        'github_token = "x"\nanthropic_api_key = "y"\n\n'
+        '[[repos]]\nowner_repo = "a/b"\n'
+    )
+    runner = CliRunner()
+    runner.invoke(cli, ["concept", "seed"])
+    result = runner.invoke(cli, ["concept", "list"])
+    assert result.exit_code == 0
+    assert "mcp.oauth.refresh" in result.output
+
+
+def test_tick_with_structural_and_propagation_flags(tmp_state_dir) -> None:
+    runner = CliRunner()
+    result = runner.invoke(cli, ["tick", "--help"])
+    assert "--include-structural" in result.output
+    assert "--include-propagation" in result.output
