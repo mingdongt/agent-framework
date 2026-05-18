@@ -1,30 +1,44 @@
-# Phase 1 seed: 3 example entries. Operator extends via corpus refresh.
+# Phase 1 seed: ~15 entries to cover the main reasoning axes.
+# Operator: evidence strings marked "seed placeholder" or "inferred from domain map" need verification.
 
 mcp_cross_origin_header_strip:
   description: "MCP client strips Authorization on cross-origin redirect"
   importance: security
-  spec_reference: "MCP 2025-06 draft, OAuth section"
+  spec_reference: "RFC 8707 + MCP OAuth section (2025-11-25 stable)"
   frameworks:
     microsoft/agent-framework:
       status: not_implemented
-      evidence: "seed placeholder"
+      evidence: "he-yufeng PR #5867 OPEN as of 2026-05-17"
       last_checked: 2026-05-18
     google/adk-python:
       status: implemented
-      evidence: "seed placeholder"
+      evidence: "merged 2026-05-13"
+      last_checked: 2026-05-18
+    langchain-ai/langchain:
+      status: implemented
+      evidence: "inferred from competitor domain map"
+      last_checked: 2026-05-18
+    pydantic/pydantic-ai:
+      status: implemented
+      evidence: "inferred from competitor domain map"
       last_checked: 2026-05-18
 
 gemini_3_thinking_blocks:
-  description: "Parse Gemini 3 thinking_blocks (no per-block signature)"
+  description: "Parse Gemini 3 thinking_blocks (no per-block signature; signatures in provider_specific_fields.thought_signatures)"
   importance: provider_keep_up
+  spec_reference: "Gemini 3 API response shape"
   frameworks:
     microsoft/agent-framework:
       status: not_implemented
-      evidence: "seed placeholder"
+      evidence: "seed placeholder; gemini package has no thinking_blocks parser yet"
       last_checked: 2026-05-18
     google/adk-python:
       status: in_progress
-      evidence: "seed placeholder"
+      evidence: "PR #5713 open per gh-watch 7d report"
+      last_checked: 2026-05-18
+    BerriAI/litellm:
+      status: in_progress
+      evidence: "PR #27889 open (strict schema properties preserved)"
       last_checked: 2026-05-18
 
 anthropic_thinking_signature_preservation:
@@ -33,5 +47,201 @@ anthropic_thinking_signature_preservation:
   frameworks:
     microsoft/agent-framework:
       status: implemented
-      evidence: "seed placeholder"
+      evidence: "PR #5784 merged (skip orphan Anthropic thinking signatures)"
+      last_checked: 2026-05-18
+    Arize-ai/phoenix:
+      status: implemented
+      evidence: "PR #13246 (replay dangling Anthropic tool uses)"
+      last_checked: 2026-05-18
+
+a2a_server_lifecycle:
+  description: "First-class A2A (Agent-to-Agent) server with full task lifecycle, not just client adapter"
+  importance: protocol_first_class
+  frameworks:
+    microsoft/agent-framework:
+      status: implemented
+      evidence: "agent-framework-a2a package + Microsoft.Agents.AI.A2A; first-class"
+      last_checked: 2026-05-18
+    strands-agents/sdk-python:
+      status: implemented
+      evidence: "PR #2245 - full A2A task lifecycle state support, server.py + executor.py"
+      last_checked: 2026-05-18
+    langchain-ai/langgraph:
+      status: not_implemented
+      evidence: "inferred; not in competitor domain map"
+      last_checked: 2026-05-18
+    pydantic/pydantic-ai:
+      status: not_implemented
+      evidence: "inferred from competitor domain map"
+      last_checked: 2026-05-18
+
+ag_ui_human_streaming:
+  description: "Dedicated human-facing streaming protocol with replay/resume (beyond raw SSE chunks)"
+  importance: design
+  frameworks:
+    microsoft/agent-framework:
+      status: implemented
+      evidence: "agent-framework-ag-ui at release-candidate stage; unique among major frameworks"
+      last_checked: 2026-05-18
+    google/adk-python:
+      status: not_implemented
+      evidence: "inferred"
+      last_checked: 2026-05-18
+    pydantic/pydantic-ai:
+      status: not_implemented
+      evidence: "inferred"
+      last_checked: 2026-05-18
+    openai/openai-agents-python:
+      status: not_implemented
+      evidence: "inferred"
+      last_checked: 2026-05-18
+
+structured_output_tool_use_conflict:
+  description: "Framework guards against silent conflict when both structured output and tool binding are used on the same model"
+  importance: dev_ergonomics
+  frameworks:
+    langchain-ai/langchain:
+      status: not_implemented
+      evidence: "domain map: with_structured_output + bind_tools silently drop one; open since late 2024"
+      last_checked: 2026-05-18
+    microsoft/agent-framework:
+      status: unknown
+      evidence: "operator: verify"
+      last_checked: 2026-05-18
+    pydantic/pydantic-ai:
+      status: implemented
+      evidence: "type-safety-first design; output_type and tools well-defined"
+      last_checked: 2026-05-18
+
+sandboxed_code_execution:
+  description: "First-class sandboxed runtime for agent code execution (Hyperlight / Docker / Firecracker / containerised workspace)"
+  importance: design
+  frameworks:
+    microsoft/agent-framework:
+      status: implemented
+      evidence: "agent-framework-hyperlight + isolation_key in hosted-memory-agent"
+      last_checked: 2026-05-18
+    OpenHands/software-agent-sdk:
+      status: implemented
+      evidence: "DockerRuntime is default; CodeActAgent generates runnable code"
+      last_checked: 2026-05-18
+    openai/openai-agents-python:
+      status: implemented
+      evidence: "SandboxAgent (v0.14+) ships first-class containerised workspace per competitor domain map"
+      last_checked: 2026-05-18
+    google/adk-python:
+      status: not_implemented
+      evidence: "inferred"
+      last_checked: 2026-05-18
+
+devui_in_box:
+  description: "Built-in DevUI / playground / dashboard shipped with the framework"
+  importance: dev_ergonomics
+  frameworks:
+    microsoft/agent-framework:
+      status: implemented
+      evidence: "agent-framework-devui + Aspire.Hosting.AgentFramework.DevUI"
+      last_checked: 2026-05-18
+    Arize-ai/phoenix:
+      status: implemented
+      evidence: "Phoenix is itself a dashboard; observability platform with playground"
+      last_checked: 2026-05-18
+    openai/openai-agents-python:
+      status: not_implemented
+      evidence: "inferred"
+      last_checked: 2026-05-18
+    google/adk-python:
+      status: implemented
+      evidence: "ADK ships visual debugger per competitor domain map (eval-focused)"
+      last_checked: 2026-05-18
+
+progressive_mcp_discovery:
+  description: "MCP client supports progressive / lazy discovery for large MCP servers (not loading all tools upfront)"
+  importance: scale
+  frameworks:
+    microsoft/agent-framework:
+      status: not_implemented
+      evidence: "issue #5821 open; current impl loads all upfront"
+      last_checked: 2026-05-18
+    google/adk-python:
+      status: not_implemented
+      evidence: "MCPToolset has async-safety bugs (#5729) but no lazy mode"
+      last_checked: 2026-05-18
+
+mcp_tool_result_event_reliability:
+  description: "MCP tool result events are reliably surfaced (not silently dropped)"
+  importance: bug_class
+  frameworks:
+    microsoft/agent-framework:
+      status: not_implemented
+      evidence: ".NET issue #5897 (events silently dropped; model fabricates errors)"
+      last_checked: 2026-05-18
+
+declarative_workflow_paradigm:
+  description: "Declarative graph as first-class workflow (vs imperative async)"
+  importance: design
+  frameworks:
+    langchain-ai/langgraph:
+      status: implemented
+      evidence: "core abstraction; StateGraph + add_node/add_edge"
+      last_checked: 2026-05-18
+    microsoft/agent-framework:
+      status: in_progress
+      evidence: "agent-framework-declarative package exists but is YAML overlay, not default"
+      last_checked: 2026-05-18
+    google/adk-python:
+      status: not_implemented
+      evidence: "inferred"
+      last_checked: 2026-05-18
+
+openinference_instrumentation:
+  description: "OpenInference / standardized OTEL semantic conventions for agent traces"
+  importance: observability
+  frameworks:
+    Arize-ai/phoenix:
+      status: implemented
+      evidence: "owns the OpenInference standard"
+      last_checked: 2026-05-18
+    microsoft/agent-framework:
+      status: unknown
+      evidence: "operator: verify OTEL semconv-genai coverage"
+      last_checked: 2026-05-18
+    openai/openai-agents-python:
+      status: implemented
+      evidence: "tracing primitive listed in competitor domain map"
+      last_checked: 2026-05-18
+
+programmatic_prompt_optimization:
+  description: "Compiler-style prompt optimization (auto-tune few-shot, instruction prompts)"
+  importance: design
+  frameworks:
+    stanfordnlp/dspy:
+      status: implemented
+      evidence: "Optimizers (BootstrapFewShot, MIPRO) are core abstraction"
+      last_checked: 2026-05-18
+    microsoft/agent-framework:
+      status: not_implemented
+      evidence: "no prompt optimizer in core or orchestrations"
+      last_checked: 2026-05-18
+
+context_provider_propagation:
+  description: "Tools added via ContextProvider propagate to all agent types consistently"
+  importance: bug_class
+  frameworks:
+    microsoft/agent-framework:
+      status: in_progress
+      evidence: "GitHubCopilotAgent fix landed; FoundryAgent issue #5883 outstanding"
+      last_checked: 2026-05-18
+
+server_side_compaction:
+  description: "Conversation compaction handled server-side by the LLM provider rather than client-side summarisation"
+  importance: provider_keep_up
+  frameworks:
+    openai/openai-agents-python:
+      status: implemented
+      evidence: "OpenAIResponsesCompactionSession per competitor domain map"
+      last_checked: 2026-05-18
+    microsoft/agent-framework:
+      status: unknown
+      evidence: "operator: verify openai package compaction strategy"
       last_checked: 2026-05-18
