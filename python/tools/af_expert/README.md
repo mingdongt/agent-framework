@@ -9,7 +9,7 @@ and produces a ranked candidate list you can review.
 For end-to-end fixing+PRs of the candidates you select, pipe them to
 [af-fix](../af_fix/) via `af-expert candidate export <id>`.
 
-**Status: Wave 4 (core platform + S1 + S2 + S3 + S4 + S6 + S7 + S8 + concept graph + hypothesis tracker).**
+**Status: Wave 5 (core platform + S1 + S2 + S3 + S4 + S5 + S6 + S7 + S8 + concept graph + hypothesis tracker + spec corpus + framework adapters).**
 See [spec](../../../docs/superpowers/specs/2026-05-17-af-expert-design.md)
 for the full 5-wave plan.
 
@@ -115,6 +115,25 @@ af-expert strategy run s2_structural_diff
 af-expert strategy run s7_feature_propagation
 ```
 
+### Wave 5 commands
+
+```bash
+# List all spec properties in the corpus
+af-expert spec list
+
+# Run the spec corpus against all tracked frameworks (uses agent-framework adapter)
+af-expert spec run
+
+# Run against a specific framework only
+af-expert spec run --framework microsoft/agent-framework
+
+# Tick with S5 spec conformance enabled
+af-expert tick --include-conformance
+
+# Run S5 strategy manually
+af-expert strategy run s5_spec_conformance
+```
+
 ### Wave 4 commands
 
 ```bash
@@ -178,6 +197,28 @@ Wave 3 adds:
 ~/.af-expert/concept_graph.json   # single-file JSON, atomic writes
 ```
 
+## Wave 5 status
+
+Wave 5 adds:
+
+- **Spec corpus** (`spec_corpus/`): property-based test files that encode invariants
+  from protocol specs. Wave 5 ships the MCP corpus (3 properties):
+  `mcp/duplicate_initialize_rejected`, `mcp/oauth_refresh_no_resource`,
+  `mcp/tool_result_format`.
+- **Framework adapters** (`framework_adapters/`): thin wrappers that expose the minimum
+  interface a framework must implement to be testable by S5. Wave 5 ships the
+  `AgentFrameworkAdapter` (stub — returns compliant responses for all MCP properties).
+  Replacing stubs with real calls into agent-framework's code paths is follow-up work.
+- **S5 spec conformance fuzzer**: for each `(adapter × property)` pair, runs the property
+  and emits a `Candidate` (category `bug`, confidence 0.95, actionability 0.95) when it
+  fails. The candidate includes the repro snippet as `evidence_snippets[0]`.
+
+Wave 5 ships ONE spec (MCP) + ONE adapter (agent-framework). Adding more specs
+(AG-UI, Anthropic tool_use, OpenAI Responses) and more adapters (LangChain,
+pydantic-ai, etc.) is explicit follow-up work.
+
+Conformance state is implicit in the candidates store — no new state files.
+
 ## Wave 4 status
 
 Wave 4 adds:
@@ -196,10 +237,6 @@ Wave 4 adds:
 ```
 ~/.af-expert/hypotheses.json   # single-file JSON, atomic writes
 ```
-
-### Still TBD (Wave 5+)
-
-- S5 spec conformance fuzzer
 
 ## Verbose logging
 
